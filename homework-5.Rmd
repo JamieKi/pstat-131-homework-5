@@ -1,0 +1,261 @@
+---
+title: "Homework 5"
+author: "PSTAT 131/231"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
+options(tinytex.verbose = TRUE)
+library(tidymodels)
+library(ISLR)
+library(ISLR2)
+library(tidyverse)
+library(glmnet)
+tidymodels_prefer()
+library(yardstick)
+library(tidymodels)
+library(parsnip)
+library(rsample)
+library(dplyr)
+library(recipes)
+library(tibble)
+library(ISLR) # For the Smarket data set
+library(ISLR2) # For the Bikeshare data set
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(ggplot2)
+library(klaR) # for naive bayes
+library(yardstick)
+library(ISLR) # For the Smarket data set
+library(ISLR2) # For the Bikeshare data set
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(ggplot2)
+library(klaR) # for naive bayes
+library(tidymodels)
+library(tidyverse)
+library(dplyr)
+tidymodels_prefer()
+
+```
+
+Elastic Net Tuning
+
+
+```{r}
+pokemon <- read.csv(file = "~/Downloads/homework-5/data/Pokemon.csv")
+head(pokemon)
+```
+
+
+### Exercise 1
+
+Install and load the `janitor` package. Use its `clean_names()` function on the Pokemon data, and save the results to work with for the rest of the assignment. What happened to the data? Why do you think `clean_names()` is useful?
+
+The title for each column heading is fixed to a more understandable title. It is more neatly organized and shows more rows with different name types. I do think 'clean_names()' is useful to understand more about the data I have since it organizes the data so that it could be read easily.
+
+```{r}
+library(janitor)
+pokemon <- pokemon %>% clean_names()
+
+```
+
+
+### Exercise 2
+
+Using the entire data set, create a bar chart of the outcome variable, 'type_1'.
+
+How many classes of the outcome are there? Are there any Pokemon types with very few Pokemon? If so, which ones?
+
+For this assignment, we'll handle the rarer classes by simply filtering them out. Filter the entire data set to contain only Pokemon whose 'type_1' is Bug, Fire, Grass, Normal, Water, or Psychic.
+
+After filtering, convert 'type_1' and 'legendary' to factors.
+
+There are 17 classes of the outcomes here. There is one Pokemon type which is "Flying" with very few Pokemon. 
+
+
+
+```{r}
+library(ggplot2)
+# Most basic bar chart
+ggplot(pokemon, aes(x = type_1)) +
+    geom_bar()
+
+
+
+pokemon_filter <- pokemon[pokemon$type_1 %in% c("Bug", "Fire", "Grass", "Normal", "Water", "Psychic"),]
+
+pokemon_filter
+
+
+names <- c('type_1' ,'legendary', 'generation')
+pokemon_filter[,names] <- lapply(pokemon_filter[,names] , factor)
+str(pokemon_filter)
+
+
+#as_factor(pokemon_filter$type_1)
+#as_factor(pokemon_filter$legendary)
+
+
+
+
+
+
+```
+
+
+
+
+### Exercise 3
+
+Perform an initial split of the data. Stratify by the outcome variable. You can choose a proportion to use. Verify that your training and test sets have the desired number of observations.
+
+Next, use v-fold cross-validation on the training set. Use 5 folds. Stratify the folds by 'type_1' as well.  Why might stratifying the folds be useful?
+
+If we stratify our folds, then the folds in our training set are selected so that the mean response value is approximately equal in all the folds. Therefore, this is useful since each class is equally represented across each train fold.
+
+```{r}
+
+set.seed(3435)
+pokemon_split <- initial_split(pokemon_filter, strata = "type_1")
+
+pokemon_train <- training(pokemon_split)
+pokemon_test <- testing(pokemon_split)
+
+pokemon_fold <- vfold_cv(pokemon_train, v = 5, strata = "type_1")
+pokemon_fold
+
+```
+
+
+
+### Exercise 4
+
+Set up a recipe to predict `type_1` with `legendary`, `generation`, `sp_atk`, `attack`, `speed`, `defense`, `hp`, and `sp_def`.
+
+- Dummy-code `legendary` and `generation`;
+
+- Center and scale all predictors.
+
+```{r}
+#change into factors
+pokemon_recipe <- recipe(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def , pokemon_train) %>% 
+  step_dummy(legendary, generation) %>%
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_numeric()) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric())
+
+```
+
+
+### Exercise 5
+
+We'll be fitting and tuning an elastic net, tuning `penalty` and `mixture` (use `multinom_reg` with the `glmnet` engine).
+
+Set up this model and workflow. Create a regular grid for `penalty` and `mixture` with 10 levels each; `mixture` should range from 0 to 1. For this assignment, we'll let `penalty` range from -5 to 5 (it's log-scaled).
+
+How many total models will you be fitting when you fit these models to your folded data?
+
+There will be 10 total models when we fit them into the folded data.
+
+```{r}
+library("glmnet")
+
+pokemon_spec <- parsnip::multinom_reg(mixture = 1, penalty = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+pokemon_workflow <- workflow() %>% 
+  add_recipe(pokemon_recipe) %>% 
+  add_model(pokemon_spec)
+
+penalty_grid <- grid_regular(penalty(range = c(-5, 5)), levels = 10)
+penalty_grid
+```
+
+
+### Exercise 6
+
+Fit the models to your folded data using `tune_grid()`.
+
+Use `autoplot()` on the results. What do you notice? Do larger or smaller values of `penalty` and `mixture` produce better accuracy and ROC AUC?
+
+Larger values of 'penalty' and 'mixture' produce better accuracy and ROC AUC. This is because as 'penalty' and 'mixture' get larger, the standard error for accuracy and ROC AUC reduces. 
+
+```{r}
+
+tune_res <- tune_grid(
+  pokemon_workflow,
+  resamples = pokemon_fold, 
+  grid = penalty_grid,
+  control = control_grid(verbose = TRUE)
+)
+
+tune_res
+
+collect_metrics(tune_res)
+
+autoplot(tune_res)
+
+```
+
+
+
+### Exercise 7
+
+Use `select_best()` to choose the model that has the optimal `roc_auc`. Then use `finalize_workflow()`, `fit()`, and `augment()` to fit the model to the training set and evaluate its performance on the testing set.
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+best_penalty <- select_best(tune_res, metric = "roc_auc")
+best_penalty
+
+pokemon_final <- finalize_workflow(pokemon_workflow, best_penalty)
+
+pokemon_final_fit <- fit(pokemon_final, data = pokemon_train)
+pokemon_final_fit
+
+pokemon_test
+
+pokemon_predict <- augment(pokemon_final_fit, new_data = pokemon_test)
+
+pokemon_predict
+```
+
+
+### Exercise 8
+
+Calculate the overall ROC AUC on the testing set.
+
+Then create plots of the different ROC curves, one per level of the outcome. Also make a heat map of the confusion matrix.
+
+What do you notice? How did your model do? Which Pokemon types is the model best at predicting, and which is it worst at? Do you have any ideas why this might be?
+
+The overall ROC AUC on the testing set is $0.680233$. I think the Pokemon "Water" was the best at predicting because the predictions with all the other predictors are fairly high. Additionally, "Normal" seems to also look pretty good with the predictions with other variables. However, "Fire" and "Grass" seem to be a bad predictor for our model because the values of our confusion matrix are almost all zeroes. Therefore, Pokemon types Water and Normal are good at predicting whereas Fire and Grass are not good predictors. 
+
+```{r}
+
+test_roc_auc <- roc_auc(data = pokemon_predict, truth = type_1, estimator = "macro_weighted", estimate = c(.pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Psychic, .pred_Water)) 
+test_roc_auc $ .estimate
+
+augment(pokemon_final_fit, new_data = pokemon_train) %>%
+  conf_mat(truth = type_1, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+
